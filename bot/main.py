@@ -41,7 +41,7 @@ def run_api(settings, bot) -> None:
 
 
 async def main() -> None:
-    if not os.getenv("RENDER"):
+    if not os.getenv("RENDER") and not os.getenv("RAILWAY_ENVIRONMENT"):
         ensure_single_instance()
     settings = load_settings()
     init_db(settings.db_path)

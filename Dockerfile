@@ -11,6 +11,7 @@ COPY web/ ./web/
 ENV PYTHONUNBUFFERED=1
 ENV API_HOST=0.0.0.0
 ENV RENDER=true
+ENV RAILWAY_ENVIRONMENT=production
 
 WORKDIR /app/bot
 CMD ["python", "main.py"]
