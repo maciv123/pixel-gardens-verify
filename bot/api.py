@@ -185,19 +185,22 @@ def create_bot(settings: Settings) -> commands.Bot:
     intents.members = True
     intents.message_content = True
 
-    bot = commands.Bot(command_prefix="!", intents=intents)
     guild = discord.Object(id=settings.discord_guild_id)
 
-    @bot.event
-    async def on_ready() -> None:
-        bot.add_view(VerifyView(settings))
-        print(f"Logged in as {bot.user} (id={bot.user.id})", flush=True)
-        try:
-            synced = await bot.tree.sync(guild=guild)
+    class PixelGardensBot(commands.Bot):
+        async def setup_hook(self) -> None:
+            self.add_view(VerifyView(settings))
+            synced = await self.tree.sync(guild=guild)
             names = [cmd.name for cmd in synced]
-            print(f"Synced {len(synced)} command(s) to {settings.discord_guild_id}: {names}", flush=True)
-        except Exception as exc:
-            print(f"Failed to sync slash commands: {exc}", flush=True)
+            print(
+                f"Synced {len(synced)} command(s) to {settings.discord_guild_id}: {names}",
+                flush=True,
+            )
+
+        async def on_ready(self) -> None:
+            print(f"Logged in as {self.user} (id={self.user.id})", flush=True)
+
+    bot = PixelGardensBot(command_prefix="!", intents=intents)
 
     async def post_verify_message(channel: discord.abc.Messageable) -> None:
         embed = discord.Embed(
@@ -217,11 +220,12 @@ def create_bot(settings: Settings) -> commands.Bot:
     )
     @app_commands.default_permissions(administrator=True)
     async def verify_slash(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(
+            "Posting verify button...", ephemeral=True
+        )
         try:
             await post_verify_message(interaction.channel)
-            await interaction.followup.send("Verify button posted.", ephemeral=True)
-            print(f"/verify used by {interaction.user} in #{interaction.channel}", flush=True)
+            print(f"/verify completed for {interaction.user}", flush=True)
         except Exception as exc:
             print(f"/verify failed: {exc}", flush=True)
             await interaction.followup.send(f"Error: {exc}", ephemeral=True)
