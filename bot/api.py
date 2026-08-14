@@ -88,8 +88,81 @@ def _already_verified_embed(wallet: str) -> discord.Embed:
         description=f"Your wallet **{_short_wallet(wallet)}** is linked to this Discord account.",
         color=0x5865F2,
     )
-    embed.set_footer(text="Run /verify again only if you need a new link.")
+    embed.set_footer(text="Run /verify again to refresh your tier roles.")
     return embed
+
+
+def _roles_refreshed_embed(
+    wallet: str, roles: list[str], balances: dict[str, int]
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="Roles Updated",
+        description=(
+            f"Stacked tier roles refreshed for wallet **{_short_wallet(wallet)}**."
+        ),
+        color=0x00AA55,
+    )
+    if roles:
+        embed.add_field(name="Roles assigned", value=", ".join(roles), inline=False)
+    pg_balance = balances.get("PG")
+    if pg_balance is not None:
+        embed.add_field(name="PG balance", value=str(pg_balance), inline=True)
+    return embed
+
+
+async def _refresh_roles_for_user(
+    interaction: discord.Interaction,
+    settings: Settings,
+    wallet_address: str,
+) -> tuple[list[str], dict[str, int]]:
+    bot = interaction.client
+    if not isinstance(bot, discord.Client):
+        raise RuntimeError("Bot is not available")
+
+    to_add, to_remove, balances = compute_role_changes(
+        wallet_address, settings.collections
+    )
+    # #region agent log
+    try:
+        import json
+        import time
+        from pathlib import Path
+
+        payload = {
+            "sessionId": "cbd26f",
+            "hypothesisId": "REFRESH",
+            "location": "api.py:_refresh_roles_for_user",
+            "message": "refresh role changes computed",
+            "data": {
+                "to_add": to_add,
+                "to_remove": to_remove,
+                "balances": balances,
+            },
+            "timestamp": int(time.time() * 1000),
+            "runId": "refresh-roles",
+        }
+        Path(__file__).resolve().parent.parent.joinpath("debug-cbd26f.log").open(
+            "a", encoding="utf-8"
+        ).write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+    # #endregion
+
+    if not to_add:
+        raise ValueError("Wallet does not hold any qualifying NFTs.")
+
+    guild = bot.get_guild(settings.discord_guild_id)
+    if guild is None:
+        raise RuntimeError("Discord server not available")
+
+    async def assign_roles() -> list[str]:
+        member = guild.get_member(interaction.user.id)
+        if member is None:
+            member = await guild.fetch_member(interaction.user.id)
+        return await apply_role_changes(member, to_add, to_remove)
+
+    assigned = await _run_on_bot_loop(bot, assign_roles())
+    return assigned, balances
 
 
 async def apply_role_changes(
@@ -288,10 +361,27 @@ class VerifyView(discord.ui.View):
             self.settings.db_path, str(interaction.user.id)
         )
         if existing is not None:
-            await interaction.response.send_message(
-                embed=_already_verified_embed(existing["wallet_address"]),
-                ephemeral=True,
-            )
+            await interaction.response.defer(ephemeral=True)
+            try:
+                assigned, balances = await _refresh_roles_for_user(
+                    interaction, self.settings, existing["wallet_address"]
+                )
+                await interaction.followup.send(
+                    embed=_roles_refreshed_embed(
+                        existing["wallet_address"], assigned, balances
+                    ),
+                    ephemeral=True,
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "I can't update roles. Move **Unfair Bot** above tier roles "
+                    "and enable **Manage Roles**.",
+                    ephemeral=True,
+                )
+            except Exception as exc:
+                await interaction.followup.send(
+                    f"Could not refresh roles: {exc}", ephemeral=True
+                )
             return
 
         session_id, verify_url = _create_verify_session(
@@ -310,10 +400,27 @@ async def _start_verify_flow(
         settings.db_path, str(interaction.user.id)
     )
     if existing is not None:
-        await interaction.response.send_message(
-            embed=_already_verified_embed(existing["wallet_address"]),
-            ephemeral=True,
-        )
+        await interaction.response.defer(ephemeral=True)
+        try:
+            assigned, balances = await _refresh_roles_for_user(
+                interaction, settings, existing["wallet_address"]
+            )
+            await interaction.followup.send(
+                embed=_roles_refreshed_embed(
+                    existing["wallet_address"], assigned, balances
+                ),
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I can't update roles. Move **Unfair Bot** above tier roles "
+                "and enable **Manage Roles**.",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            await interaction.followup.send(
+                f"Could not refresh roles: {exc}", ephemeral=True
+            )
         return
 
     _, verify_url = _create_verify_session(settings, str(interaction.user.id))
@@ -378,7 +485,7 @@ def create_bot(settings: Settings) -> commands.Bot:
 
     @bot.tree.command(
         name="verify",
-        description="Verify your NFT holdings — connect wallet and get roles",
+        description="Verify NFTs or refresh your stacked tier roles",
         guild=guild,
     )
     async def verify_slash(interaction: discord.Interaction) -> None:
