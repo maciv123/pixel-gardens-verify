@@ -1,6 +1,10 @@
 import asyncio
+import json
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import discord
@@ -20,15 +24,96 @@ from db import (
     mark_session_used,
     save_verification,
 )
+from sessions import build_verify_url, new_session_id, normalize_session_id
 from verify import build_sign_message, compute_role_changes, recover_signer
 
 WEB_DIR = __import__("pathlib").Path(__file__).resolve().parent.parent / "web"
+_DEBUG_LOG = Path(__file__).resolve().parent.parent / "debug-cbd26f.log"
+
+
+def _agent_log(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
+    # #region agent log
+    try:
+        payload = {
+            "sessionId": "cbd26f",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+            "runId": "verify-flow",
+        }
+        with _DEBUG_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 class VerifyRequest(BaseModel):
     session_id: str
     address: str
     signature: str
+
+
+class VerifyResponse(BaseModel):
+    status: str
+    wallet: str
+    roles: list[str]
+    balances: dict[str, int]
+
+
+def _short_wallet(address: str) -> str:
+    if len(address) < 12:
+        return address
+    return f"{address[:6]}...{address[-4:]}"
+
+
+def _verify_embed(verify_url: str) -> discord.Embed:
+    embed = discord.Embed(
+        title="Pixel Gardens Verification",
+        description=(
+            "Verify your NFT holdings on **Robinhood Chain** "
+            "and receive the correct tier roles."
+        ),
+        color=0x00AA55,
+    )
+    embed.add_field(
+        name="1. Open verify page",
+        value=f"[Click here to verify]({verify_url})",
+        inline=False,
+    )
+    embed.add_field(
+        name="2. Connect & sign",
+        value="Connect MetaMask on Robinhood Chain, then sign the message.",
+        inline=False,
+    )
+    embed.set_footer(text="Single-use link · Expires in 15 minutes · Only you can see this")
+    return embed
+
+
+def _create_verify_session(settings: Settings, discord_user_id: str) -> tuple[str, str]:
+    session_id = new_session_id()
+    nonce = secrets.token_hex(8)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    create_session(
+        settings.db_path,
+        session_id,
+        discord_user_id,
+        nonce,
+        expires_at,
+    )
+    return session_id, build_verify_url(settings.verify_base_url, session_id)
+
+
+def _already_verified_embed(wallet: str) -> discord.Embed:
+    embed = discord.Embed(
+        title="Already Verified",
+        description=f"Your wallet **{_short_wallet(wallet)}** is linked to this Discord account.",
+        color=0x5865F2,
+    )
+    embed.set_footer(text="Run /verify again only if you need a new link.")
+    return embed
 
 
 async def apply_role_changes(
@@ -59,10 +144,42 @@ async def apply_role_changes(
 async def _run_on_bot_loop(bot: discord.Client, coro):
     """Run Discord coroutines on the bot's event loop (API runs on a separate thread)."""
     loop = bot.loop
+    # #region agent log
+    _agent_log(
+        "B",
+        "api.py:_run_on_bot_loop",
+        "dispatching coroutine to bot loop",
+        {
+            "bot_loop_running": bool(loop and loop.is_running()),
+            "api_thread": threading.current_thread().name,
+            "bot_ready": bot.is_ready(),
+        },
+    )
+    # #endregion
     if loop is None or not loop.is_running():
         raise RuntimeError("Discord bot is not connected yet. Try again in a few seconds.")
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return await asyncio.wrap_future(future)
+    try:
+        result = await asyncio.wrap_future(future)
+        # #region agent log
+        _agent_log(
+            "A",
+            "api.py:_run_on_bot_loop",
+            "bot loop coroutine completed",
+            {"result_type": type(result).__name__},
+        )
+        # #endregion
+        return result
+    except Exception as exc:
+        # #region agent log
+        _agent_log(
+            "C",
+            "api.py:_run_on_bot_loop",
+            "bot loop coroutine failed",
+            {"error_type": type(exc).__name__, "error": str(exc)},
+        )
+        # #endregion
+        raise
 
 
 def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
@@ -73,8 +190,20 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
     async def index() -> FileResponse:
         return FileResponse(WEB_DIR / "index.html")
 
+    @app.get("/verify/{session_id}")
+    async def verify_page(session_id: str) -> FileResponse:
+        try:
+            normalize_session_id(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Invalid verification link") from exc
+        return FileResponse(WEB_DIR / "index.html")
+
     @app.get("/api/session/{session_id}")
     async def get_session_info(session_id: str) -> dict[str, Any]:
+        try:
+            session_id = normalize_session_id(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Invalid verification link") from exc
         row = get_session(settings.db_path, session_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -84,7 +213,10 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
         if row["used"]:
-            raise HTTPException(status_code=410, detail="Session already used")
+            raise HTTPException(
+                status_code=410,
+                detail="This link was already used. Return to Discord and run /verify for a new link.",
+            )
         if datetime.now(timezone.utc) > expires_at:
             raise HTTPException(status_code=410, detail="Session expired")
 
@@ -96,8 +228,29 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             "contract_address": settings.contract_address,
         }
 
-    @app.post("/api/verify")
-    async def verify_holder(payload: VerifyRequest) -> dict[str, str]:
+    @app.post("/api/verify", response_model=VerifyResponse)
+    async def verify_holder(payload: VerifyRequest) -> VerifyResponse:
+        try:
+            session_id = normalize_session_id(payload.session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Invalid verification link") from exc
+        payload = VerifyRequest(
+            session_id=session_id,
+            address=payload.address,
+            signature=payload.signature,
+        )
+        # #region agent log
+        _agent_log(
+            "D",
+            "api.py:verify_holder",
+            "verify request received",
+            {
+                "session_id_prefix": payload.session_id[:8],
+                "address_prefix": payload.address[:10],
+                "api_thread": threading.current_thread().name,
+            },
+        )
+        # #endregion
         row = get_session(settings.db_path, payload.session_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -107,7 +260,10 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
         if row["used"]:
-            raise HTTPException(status_code=410, detail="Session already used")
+            raise HTTPException(
+                status_code=410,
+                detail="This link was already used. Return to Discord and run /verify for a new link.",
+            )
         if datetime.now(timezone.utc) > expires_at:
             raise HTTPException(status_code=410, detail="Session expired")
 
@@ -148,6 +304,18 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             raise HTTPException(status_code=503, detail="Discord server not available")
 
         async def assign_member_roles() -> list[str]:
+            # #region agent log
+            _agent_log(
+                "A",
+                "api.py:assign_member_roles",
+                "running on bot event loop",
+                {
+                    "bot_thread": threading.current_thread().name,
+                    "to_add": to_add,
+                    "to_remove": to_remove,
+                },
+            )
+            # #endregion
             member = guild.get_member(int(row["discord_user_id"]))
             if member is None:
                 member = await guild.fetch_member(int(row["discord_user_id"]))
@@ -155,6 +323,14 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
 
         try:
             assigned = await _run_on_bot_loop(bot, assign_member_roles())
+            # #region agent log
+            _agent_log(
+                "A",
+                "api.py:verify_holder",
+                "verify succeeded",
+                {"assigned_roles": assigned, "balances": balances},
+            )
+            # #endregion
         except discord.NotFound as exc:
             raise HTTPException(
                 status_code=404, detail="Discord member not found in server"
@@ -169,16 +345,26 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             ) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            # #region agent log
+            _agent_log(
+                "E",
+                "api.py:verify_holder",
+                "verify failed with unexpected error",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+            )
+            # #endregion
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         save_verification(settings.db_path, row["discord_user_id"], payload.address)
         mark_session_used(settings.db_path, payload.session_id)
 
-        return {
-            "status": "verified",
-            "wallet": payload.address.lower(),
-            "roles": assigned,
-            "balances": balances,
-        }
+        return VerifyResponse(
+            status="verified",
+            wallet=payload.address.lower(),
+            roles=assigned,
+            balances=balances,
+        )
 
     return app
 
@@ -201,28 +387,16 @@ class VerifyView(discord.ui.View):
         )
         if existing is not None:
             await interaction.response.send_message(
-                f"You are already verified with wallet `{existing['wallet_address']}`.",
+                embed=_already_verified_embed(existing["wallet_address"]),
                 ephemeral=True,
             )
             return
 
-        session_id = secrets.token_hex(16)
-        nonce = secrets.token_hex(8)
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-        create_session(
-            self.settings.db_path,
-            session_id,
-            str(interaction.user.id),
-            nonce,
-            expires_at,
+        session_id, verify_url = _create_verify_session(
+            self.settings, str(interaction.user.id)
         )
-
-        verify_url = f"{self.settings.verify_base_url}/?session={session_id}"
         await interaction.response.send_message(
-            "**Connect your wallet to verify:**\n"
-            f"{verify_url}\n\n"
-            "Open that link → connect MetaMask on **Robinhood Chain** → sign. "
-            "Roles are assigned automatically.",
+            embed=_verify_embed(verify_url),
             ephemeral=True,
         )
 
@@ -235,27 +409,14 @@ async def _start_verify_flow(
     )
     if existing is not None:
         await interaction.response.send_message(
-            f"You are already verified with wallet `{existing['wallet_address']}`.",
+            embed=_already_verified_embed(existing["wallet_address"]),
             ephemeral=True,
         )
         return
 
-    session_id = secrets.token_hex(16)
-    nonce = secrets.token_hex(8)
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-    create_session(
-        settings.db_path,
-        session_id,
-        str(interaction.user.id),
-        nonce,
-        expires_at,
-    )
-    verify_url = f"{settings.verify_base_url}/?session={session_id}"
+    _, verify_url = _create_verify_session(settings, str(interaction.user.id))
     await interaction.response.send_message(
-        "**Connect your wallet to verify:**\n"
-        f"{verify_url}\n\n"
-        "Tap/click the link above → connect MetaMask on **Robinhood Chain** → sign. "
-        "Roles are assigned automatically.",
+        embed=_verify_embed(verify_url),
         ephemeral=True,
     )
 
@@ -271,8 +432,31 @@ def create_bot(settings: Settings) -> commands.Bot:
     class PixelGardensBot(commands.Bot):
         async def setup_hook(self) -> None:
             self.add_view(VerifyView(settings))
-            synced = await self.tree.sync(guild=guild)
+            try:
+                synced = await self.tree.sync(guild=guild)
+            except Exception as exc:
+                # #region agent log
+                _agent_log(
+                    "F",
+                    "api.py:setup_hook",
+                    "guild command sync failed",
+                    {"error": str(exc)},
+                )
+                # #endregion
+                print(f"Command sync failed: {exc}", flush=True)
+                raise
             names = [cmd.name for cmd in synced]
+            # #region agent log
+            _agent_log(
+                "F",
+                "api.py:setup_hook",
+                "guild commands synced",
+                {
+                    "guild_id": settings.discord_guild_id,
+                    "commands": [{"name": c.name, "id": str(c.id)} for c in synced],
+                },
+            )
+            # #endregion
             print(
                 f"Synced {len(synced)} command(s) to {settings.discord_guild_id}: {names}",
                 flush=True,
@@ -288,8 +472,29 @@ def create_bot(settings: Settings) -> commands.Bot:
     async def on_app_command_error(
         interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
+        # #region agent log
+        _agent_log(
+            "F",
+            "api.py:on_app_command_error",
+            "slash command error",
+            {
+                "error": str(error),
+                "interaction_command": getattr(interaction.command, "name", None),
+                "interaction_command_id": str(
+                    getattr(interaction.command, "id", None) or interaction.data.get("id")
+                ),
+                "guild_id": interaction.guild_id,
+            },
+        )
+        # #endregion
         print(f"Command error: {error}", flush=True)
-        msg = f"Something went wrong: {error}"
+        if isinstance(error, app_commands.CommandNotFound):
+            msg = (
+                "Bot just restarted. Open the slash menu and pick `/verify` again "
+                "(don’t tap an old cached suggestion)."
+            )
+        else:
+            msg = f"Something went wrong: {error}"
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
         else:
@@ -309,6 +514,17 @@ def create_bot(settings: Settings) -> commands.Bot:
         guild=guild,
     )
     async def verify_slash(interaction: discord.Interaction) -> None:
+        # #region agent log
+        _agent_log(
+            "G",
+            "api.py:verify_slash",
+            "verify slash handler entered",
+            {
+                "user": str(interaction.user),
+                "command_id": str(getattr(interaction.command, "id", None)),
+            },
+        )
+        # #endregion
         try:
             await _start_verify_flow(interaction, settings)
             print(f"/verify started for {interaction.user}", flush=True)
@@ -354,17 +570,7 @@ def create_bot(settings: Settings) -> commands.Bot:
                 mention_author=False,
             )
             return
-        session_id = secrets.token_hex(16)
-        nonce = secrets.token_hex(8)
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-        create_session(
-            settings.db_path,
-            session_id,
-            str(ctx.author.id),
-            nonce,
-            expires_at,
-        )
-        verify_url = f"{settings.verify_base_url}/?session={session_id}"
+        _, verify_url = _create_verify_session(settings, str(ctx.author.id))
         await ctx.reply(
             f"Open this link to verify (Robinhood Chain + MetaMask): {verify_url}",
             mention_author=True,

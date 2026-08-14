@@ -3,12 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>UnFairBears NFT Verification</title>
+  <title>Pixel Gardens · Verify</title>
   <style>
     * { box-sizing: border-box; }
     body {
-      font-family: system-ui, -apple-system, sans-serif;
-      background: #0f1419;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(0, 170, 85, 0.12), transparent 45%),
+        #0b0f14;
       color: #e7e9ea;
       margin: 0;
       min-height: 100vh;
@@ -18,50 +20,210 @@
       padding: 24px;
     }
     .card {
-      background: #1a1f26;
-      border: 1px solid #2f3336;
-      border-radius: 16px;
-      padding: 32px;
-      max-width: 480px;
+      background: linear-gradient(180deg, #151b22 0%, #11161c 100%);
+      border: 1px solid #26303a;
+      border-radius: 20px;
+      padding: 28px;
+      max-width: 460px;
       width: 100%;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
     }
-    h1 { margin: 0 0 8px; font-size: 1.5rem; }
-    p { color: #8b98a5; line-height: 1.5; }
+    .badge {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(0, 170, 85, 0.15);
+      color: #5dffb0;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 1.65rem;
+      line-height: 1.2;
+    }
+    .subtitle {
+      color: #8b98a5;
+      line-height: 1.55;
+      margin: 0 0 22px;
+      font-size: 0.95rem;
+    }
+    .steps {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+    .step {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .step-num {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #24303a;
+      color: #8b98a5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .step.active .step-num {
+      background: rgba(0, 170, 85, 0.2);
+      color: #5dffb0;
+    }
+    .step.done .step-num {
+      background: rgba(0, 170, 85, 0.25);
+      color: #5dffb0;
+    }
+    .step-text {
+      font-size: 0.9rem;
+      color: #b6c2cf;
+      line-height: 1.45;
+    }
+    .step-text strong {
+      color: #e7e9ea;
+      display: block;
+      margin-bottom: 2px;
+    }
+    .wallet-box {
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(0, 170, 85, 0.08);
+      border: 1px solid rgba(0, 170, 85, 0.18);
+    }
+    .wallet-box.visible { display: block; }
+    .wallet-label {
+      font-size: 0.75rem;
+      color: #8b98a5;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+    .wallet {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.9rem;
+      word-break: break-all;
+      color: #5dffb0;
+    }
     button {
       width: 100%;
-      margin-top: 16px;
-      padding: 14px 20px;
+      margin-top: 10px;
+      padding: 14px 18px;
       border: none;
-      border-radius: 10px;
-      font-size: 1rem;
-      font-weight: 600;
+      border-radius: 12px;
+      font-size: 0.98rem;
+      font-weight: 700;
       cursor: pointer;
-      background: #00aa55;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+    button:hover:not(:disabled) { transform: translateY(-1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    #connect-btn {
+      background: linear-gradient(180deg, #00c965 0%, #00aa55 100%);
       color: white;
     }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.secondary { background: #2f3336; }
+    #verify-btn {
+      background: #24303a;
+      color: #e7e9ea;
+      border: 1px solid #33404d;
+    }
+    #actions.hidden { display: none; }
     #status {
       margin-top: 16px;
-      padding: 12px;
-      border-radius: 8px;
-      font-size: 0.9rem;
+      padding: 14px 16px;
+      border-radius: 12px;
+      font-size: 0.92rem;
+      line-height: 1.5;
       display: none;
     }
-    #status.error { display: block; background: #3d1f1f; color: #ff8a8a; }
-    #status.success { display: block; background: #1f3d2a; color: #8affaa; }
-    #status.info { display: block; background: #1f2a3d; color: #8ab4ff; }
-    .wallet { font-family: monospace; font-size: 0.85rem; word-break: break-all; }
+    #status.error {
+      display: block;
+      background: rgba(255, 90, 90, 0.1);
+      border: 1px solid rgba(255, 90, 90, 0.25);
+      color: #ffb4b4;
+    }
+    #status.success {
+      display: block;
+      background: rgba(0, 170, 85, 0.12);
+      border: 1px solid rgba(0, 170, 85, 0.28);
+      color: #8affc0;
+    }
+    #status.info {
+      display: block;
+      background: rgba(88, 101, 242, 0.12);
+      border: 1px solid rgba(88, 101, 242, 0.25);
+      color: #b8c0ff;
+    }
+    .success-title {
+      font-size: 1.05rem;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+    .role-pill {
+      display: inline-block;
+      margin-top: 8px;
+      margin-right: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(0, 170, 85, 0.18);
+      color: #8affc0;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+    .footer-note {
+      margin-top: 18px;
+      text-align: center;
+      color: #667786;
+      font-size: 0.78rem;
+    }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>UnFairBears NFT Verify</h1>
-    <p>Connect your wallet on Robinhood Chain to verify Pixel Gardens holdings and receive the correct tier roles.</p>
-    <p id="wallet-display" class="wallet"></p>
-    <button id="connect-btn">Connect Wallet</button>
-    <button id="verify-btn" disabled>Sign & Verify</button>
+    <div class="badge">Robinhood Chain</div>
+    <h1>Verify Pixel Gardens</h1>
+    <p class="subtitle">Connect your wallet, sign once, and your Discord roles update automatically.</p>
+
+    <div class="steps">
+      <div class="step active" id="step-connect">
+        <div class="step-num">1</div>
+        <div class="step-text"><strong>Connect wallet</strong>MetaMask on Robinhood Chain</div>
+      </div>
+      <div class="step" id="step-sign">
+        <div class="step-num">2</div>
+        <div class="step-text"><strong>Sign message</strong>Proves you own the wallet — no gas fee</div>
+      </div>
+      <div class="step" id="step-done">
+        <div class="step-num">3</div>
+        <div class="step-text"><strong>Get roles</strong>Return to Discord with your tier roles</div>
+      </div>
+    </div>
+
+    <div id="wallet-box" class="wallet-box">
+      <div class="wallet-label">Connected wallet</div>
+      <div id="wallet-display" class="wallet"></div>
+    </div>
+
+    <div id="actions">
+      <button id="connect-btn">Connect Wallet</button>
+      <button id="verify-btn" disabled>Sign & Verify</button>
+    </div>
+
     <div id="status"></div>
+    <div class="footer-note">Secure wallet signature · No transaction required</div>
   </div>
   <script src="/static/app.js"></script>
 </body>
