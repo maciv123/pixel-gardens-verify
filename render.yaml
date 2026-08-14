@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: pixel-gardens-verify
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd bot && python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: RENDER
+        value: "true"
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: HOLDER_ROLE_ID
+        sync: false
+      - key: CONTRACT_ADDRESS
+        value: 0x0bfdf5e03e6480a8b40f40c468d55b239811aef0
+      - key: CHAIN_ID
+        value: "4663"
+      - key: ROBINHOOD_RPC_URL
+        value: https://rpc.mainnet.chain.robinhood.com
+      - key: VERIFY_BASE_URL
+        sync: false

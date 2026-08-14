@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import sys
 import threading
@@ -36,7 +37,8 @@ def run_api(settings, bot) -> None:
 
 
 async def main() -> None:
-    ensure_single_instance()
+    if not os.getenv("RENDER"):
+        ensure_single_instance()
     settings = load_settings()
     init_db(settings.db_path)
 
@@ -46,6 +48,7 @@ async def main() -> None:
         target=run_api,
         args=(settings, bot),
         daemon=True,
+        name="verify-api",
     )
     api_thread.start()
 

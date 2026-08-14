@@ -44,6 +44,6 @@ def load_settings() -> Settings:
         ),
         verify_base_url=os.getenv("VERIFY_BASE_URL", "http://localhost:8080").rstrip("/"),
         api_host=os.getenv("API_HOST", "0.0.0.0"),
-        api_port=int(os.getenv("API_PORT", "8080")),
+        api_port=int(os.getenv("PORT", os.getenv("API_PORT", "8080"))),
         db_path=os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "verifications.db")),
     )
