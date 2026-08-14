@@ -1,10 +1,6 @@
 import asyncio
-import json
 import secrets
-import threading
-import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import discord
@@ -28,26 +24,6 @@ from sessions import build_verify_url, new_session_id, normalize_session_id
 from verify import build_sign_message, compute_role_changes, recover_signer
 
 WEB_DIR = __import__("pathlib").Path(__file__).resolve().parent.parent / "web"
-_DEBUG_LOG = Path(__file__).resolve().parent.parent / "debug-cbd26f.log"
-
-
-def _agent_log(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
-    # #region agent log
-    try:
-        payload = {
-            "sessionId": "cbd26f",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-            "runId": "verify-flow",
-        }
-        with _DEBUG_LOG.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-    # #endregion
 
 
 class VerifyRequest(BaseModel):
@@ -144,42 +120,10 @@ async def apply_role_changes(
 async def _run_on_bot_loop(bot: discord.Client, coro):
     """Run Discord coroutines on the bot's event loop (API runs on a separate thread)."""
     loop = bot.loop
-    # #region agent log
-    _agent_log(
-        "B",
-        "api.py:_run_on_bot_loop",
-        "dispatching coroutine to bot loop",
-        {
-            "bot_loop_running": bool(loop and loop.is_running()),
-            "api_thread": threading.current_thread().name,
-            "bot_ready": bot.is_ready(),
-        },
-    )
-    # #endregion
     if loop is None or not loop.is_running():
         raise RuntimeError("Discord bot is not connected yet. Try again in a few seconds.")
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    try:
-        result = await asyncio.wrap_future(future)
-        # #region agent log
-        _agent_log(
-            "A",
-            "api.py:_run_on_bot_loop",
-            "bot loop coroutine completed",
-            {"result_type": type(result).__name__},
-        )
-        # #endregion
-        return result
-    except Exception as exc:
-        # #region agent log
-        _agent_log(
-            "C",
-            "api.py:_run_on_bot_loop",
-            "bot loop coroutine failed",
-            {"error_type": type(exc).__name__, "error": str(exc)},
-        )
-        # #endregion
-        raise
+    return await asyncio.wrap_future(future)
 
 
 def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
@@ -239,18 +183,6 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             address=payload.address,
             signature=payload.signature,
         )
-        # #region agent log
-        _agent_log(
-            "D",
-            "api.py:verify_holder",
-            "verify request received",
-            {
-                "session_id_prefix": payload.session_id[:8],
-                "address_prefix": payload.address[:10],
-                "api_thread": threading.current_thread().name,
-            },
-        )
-        # #endregion
         row = get_session(settings.db_path, payload.session_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -304,18 +236,6 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             raise HTTPException(status_code=503, detail="Discord server not available")
 
         async def assign_member_roles() -> list[str]:
-            # #region agent log
-            _agent_log(
-                "A",
-                "api.py:assign_member_roles",
-                "running on bot event loop",
-                {
-                    "bot_thread": threading.current_thread().name,
-                    "to_add": to_add,
-                    "to_remove": to_remove,
-                },
-            )
-            # #endregion
             member = guild.get_member(int(row["discord_user_id"]))
             if member is None:
                 member = await guild.fetch_member(int(row["discord_user_id"]))
@@ -323,14 +243,6 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
 
         try:
             assigned = await _run_on_bot_loop(bot, assign_member_roles())
-            # #region agent log
-            _agent_log(
-                "A",
-                "api.py:verify_holder",
-                "verify succeeded",
-                {"assigned_roles": assigned, "balances": balances},
-            )
-            # #endregion
         except discord.NotFound as exc:
             raise HTTPException(
                 status_code=404, detail="Discord member not found in server"
@@ -345,16 +257,6 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             ) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except Exception as exc:
-            # #region agent log
-            _agent_log(
-                "E",
-                "api.py:verify_holder",
-                "verify failed with unexpected error",
-                {"error_type": type(exc).__name__, "error": str(exc)},
-            )
-            # #endregion
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         save_verification(settings.db_path, row["discord_user_id"], payload.address)
         mark_session_used(settings.db_path, payload.session_id)
@@ -435,28 +337,9 @@ def create_bot(settings: Settings) -> commands.Bot:
             try:
                 synced = await self.tree.sync(guild=guild)
             except Exception as exc:
-                # #region agent log
-                _agent_log(
-                    "F",
-                    "api.py:setup_hook",
-                    "guild command sync failed",
-                    {"error": str(exc)},
-                )
-                # #endregion
                 print(f"Command sync failed: {exc}", flush=True)
                 raise
             names = [cmd.name for cmd in synced]
-            # #region agent log
-            _agent_log(
-                "F",
-                "api.py:setup_hook",
-                "guild commands synced",
-                {
-                    "guild_id": settings.discord_guild_id,
-                    "commands": [{"name": c.name, "id": str(c.id)} for c in synced],
-                },
-            )
-            # #endregion
             print(
                 f"Synced {len(synced)} command(s) to {settings.discord_guild_id}: {names}",
                 flush=True,
@@ -472,21 +355,6 @@ def create_bot(settings: Settings) -> commands.Bot:
     async def on_app_command_error(
         interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
-        # #region agent log
-        _agent_log(
-            "F",
-            "api.py:on_app_command_error",
-            "slash command error",
-            {
-                "error": str(error),
-                "interaction_command": getattr(interaction.command, "name", None),
-                "interaction_command_id": str(
-                    getattr(interaction.command, "id", None) or interaction.data.get("id")
-                ),
-                "guild_id": interaction.guild_id,
-            },
-        )
-        # #endregion
         print(f"Command error: {error}", flush=True)
         if isinstance(error, app_commands.CommandNotFound):
             msg = (
@@ -514,17 +382,6 @@ def create_bot(settings: Settings) -> commands.Bot:
         guild=guild,
     )
     async def verify_slash(interaction: discord.Interaction) -> None:
-        # #region agent log
-        _agent_log(
-            "G",
-            "api.py:verify_slash",
-            "verify slash handler entered",
-            {
-                "user": str(interaction.user),
-                "command_id": str(getattr(interaction.command, "id", None)),
-            },
-        )
-        # #endregion
         try:
             await _start_verify_flow(interaction, settings)
             print(f"/verify started for {interaction.user}", flush=True)
