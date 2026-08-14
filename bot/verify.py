@@ -2,7 +2,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 from web3 import Web3
 
-from nft_collections import Collection
+from nft_collections import Collection, RoleTier
 
 ERC721_ABI = [
     {
@@ -43,6 +43,28 @@ def get_balance(rpc_url: str, contract_address: str, wallet_address: str) -> int
     return int(balance)
 
 
+def _stacked_tier_roles(
+    roles: tuple[RoleTier, ...], balance: int
+) -> tuple[list[int], list[int]]:
+    """Assign the matching tier plus every lower tier (roles stack)."""
+    if balance <= 0 or not roles:
+        return [], [tier.role_id for tier in roles]
+
+    sorted_tiers = sorted(roles, key=lambda tier: tier.min_balance, reverse=True)
+    qualifying_idx = None
+    for idx, tier in enumerate(sorted_tiers):
+        if tier.min_balance <= balance <= tier.max_balance:
+            qualifying_idx = idx
+            break
+
+    if qualifying_idx is None:
+        return [], [tier.role_id for tier in roles]
+
+    stacked = sorted_tiers[qualifying_idx:]
+    below = sorted_tiers[:qualifying_idx]
+    return [tier.role_id for tier in stacked], [tier.role_id for tier in below]
+
+
 def compute_role_changes(
     wallet_address: str, collections: tuple[Collection, ...]
 ) -> tuple[list[int], list[int], dict[str, int]]:
@@ -58,10 +80,34 @@ def compute_role_changes(
         balance = get_balance(collection.rpc_url, collection.contract, wallet_address)
         balances[collection.name] = balance
 
-        for tier in collection.roles:
-            if tier.min_balance <= balance <= tier.max_balance:
-                to_add.append(tier.role_id)
-            else:
-                to_remove.append(tier.role_id)
+        add_ids, remove_ids = _stacked_tier_roles(collection.roles, balance)
+        to_add.extend(add_ids)
+        to_remove.extend(remove_ids)
+        # #region agent log
+        try:
+            import json
+            import time
+            from pathlib import Path
+
+            payload = {
+                "sessionId": "cbd26f",
+                "hypothesisId": "STACK",
+                "location": "verify.py:compute_role_changes",
+                "message": "stacked tier roles computed",
+                "data": {
+                    "collection": collection.name,
+                    "balance": balance,
+                    "to_add": add_ids,
+                    "to_remove": remove_ids,
+                },
+                "timestamp": int(time.time() * 1000),
+                "runId": "stack-roles",
+            }
+            Path(__file__).resolve().parent.parent.joinpath("debug-cbd26f.log").open(
+                "a", encoding="utf-8"
+            ).write(json.dumps(payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
     return to_add, to_remove, balances

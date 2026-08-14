@@ -25,7 +25,7 @@ Discord bot for **UnFairBears** — tiered NFT verification on **Robinhood Chain
 
 1. User runs **`/verify`** in Discord → gets a private verify link
 2. Opens link → connects MetaMask on Robinhood Chain → signs
-3. Bot checks on-chain balance → assigns **tier roles**
+3. Bot checks on-chain balance → assigns **stacked tier roles** (highest tier + all lower tiers)
 
 **Collections:**
 - **PG (Pixel Gardens)** — live
