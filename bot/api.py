@@ -1,6 +1,10 @@
 import asyncio
+import json
+import os
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import discord
@@ -92,8 +96,19 @@ def _already_verified_embed(wallet: str) -> discord.Embed:
     return embed
 
 
+def _resolve_role_names(guild: discord.Guild, role_ids: list[int]) -> list[str]:
+    names: list[str] = []
+    for role_id in sorted(set(role_ids)):
+        role = guild.get_role(role_id)
+        names.append(role.name if role is not None else f"role-{role_id}")
+    return names
+
+
 def _roles_refreshed_embed(
-    wallet: str, roles: list[str], balances: dict[str, int]
+    wallet: str,
+    stacked_roles: list[str],
+    newly_assigned: list[str],
+    balances: dict[str, int],
 ) -> discord.Embed:
     embed = discord.Embed(
         title="Roles Updated",
@@ -102,45 +117,43 @@ def _roles_refreshed_embed(
         ),
         color=0x00AA55,
     )
-    if roles:
-        embed.add_field(name="Roles assigned", value=", ".join(roles), inline=False)
+    if stacked_roles:
+        embed.add_field(
+            name="Your stacked roles",
+            value=", ".join(stacked_roles),
+            inline=False,
+        )
+    if newly_assigned:
+        embed.add_field(
+            name="Newly assigned",
+            value=", ".join(newly_assigned),
+            inline=False,
+        )
+    elif stacked_roles:
+        embed.add_field(
+            name="Newly assigned",
+            value="You already had all stacked roles.",
+            inline=False,
+        )
     pg_balance = balances.get("PG")
     if pg_balance is not None:
         embed.add_field(name="PG balance", value=str(pg_balance), inline=True)
     return embed
 
 
-async def _refresh_roles_for_user(
-    interaction: discord.Interaction,
-    settings: Settings,
-    wallet_address: str,
-) -> tuple[list[str], dict[str, int]]:
-    bot = interaction.client
-    if not isinstance(bot, discord.Client):
-        raise RuntimeError("Bot is not available")
-
-    to_add, to_remove, balances = compute_role_changes(
-        wallet_address, settings.collections
-    )
+def _debug_log(location: str, message: str, data: dict[str, Any], hypothesis_id: str) -> None:
+    payload = {
+        "sessionId": "cbd26f",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+        "runId": "refresh-roles",
+    }
     # #region agent log
     try:
-        import json
-        import time
-        from pathlib import Path
-
-        payload = {
-            "sessionId": "cbd26f",
-            "hypothesisId": "REFRESH",
-            "location": "api.py:_refresh_roles_for_user",
-            "message": "refresh role changes computed",
-            "data": {
-                "to_add": to_add,
-                "to_remove": to_remove,
-                "balances": balances,
-            },
-            "timestamp": int(time.time() * 1000),
-            "runId": "refresh-roles",
-        }
+        print(f"[DEBUG cbd26f] {json.dumps(payload)}", flush=True)
         Path(__file__).resolve().parent.parent.joinpath("debug-cbd26f.log").open(
             "a", encoding="utf-8"
         ).write(json.dumps(payload) + "\n")
@@ -148,12 +161,38 @@ async def _refresh_roles_for_user(
         pass
     # #endregion
 
-    if not to_add:
-        raise ValueError("Wallet does not hold any qualifying NFTs.")
+
+async def _refresh_roles_for_user(
+    interaction: discord.Interaction,
+    settings: Settings,
+    wallet_address: str,
+) -> tuple[list[str], list[str], dict[str, int]]:
+    bot = interaction.client
+    if not isinstance(bot, discord.Client):
+        raise RuntimeError("Bot is not available")
 
     guild = bot.get_guild(settings.discord_guild_id)
     if guild is None:
         raise RuntimeError("Discord server not available")
+
+    to_add, to_remove, balances = compute_role_changes(
+        wallet_address, settings.collections
+    )
+    stacked_roles = _resolve_role_names(guild, to_add)
+    _debug_log(
+        "api.py:_refresh_roles_for_user",
+        "refresh role changes computed",
+        {
+            "to_add": to_add,
+            "to_remove": to_remove,
+            "balances": balances,
+            "stacked_roles": stacked_roles,
+        },
+        "REFRESH",
+    )
+
+    if not to_add:
+        raise ValueError("Wallet does not hold any qualifying NFTs.")
 
     async def assign_roles() -> list[str]:
         member = guild.get_member(interaction.user.id)
@@ -162,7 +201,13 @@ async def _refresh_roles_for_user(
         return await apply_role_changes(member, to_add, to_remove)
 
     assigned = await _run_on_bot_loop(bot, assign_roles())
-    return assigned, balances
+    _debug_log(
+        "api.py:_refresh_roles_for_user",
+        "refresh roles applied",
+        {"newly_assigned": assigned, "stacked_roles": stacked_roles},
+        "REFRESH",
+    )
+    return assigned, stacked_roles, balances
 
 
 async def apply_role_changes(
@@ -202,6 +247,15 @@ async def _run_on_bot_loop(bot: discord.Client, coro):
 def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
     app = FastAPI(title="UnFairBears NFT Verify")
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
+    @app.get("/api/health")
+    async def health() -> dict[str, str]:
+        build = os.getenv("RAILWAY_GIT_COMMIT_SHA", "local")
+        return {
+            "status": "ok",
+            "build": build[:12] if build else "local",
+            "refresh_roles": "enabled",
+        }
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -363,12 +417,15 @@ class VerifyView(discord.ui.View):
         if existing is not None:
             await interaction.response.defer(ephemeral=True)
             try:
-                assigned, balances = await _refresh_roles_for_user(
+                assigned, stacked_roles, balances = await _refresh_roles_for_user(
                     interaction, self.settings, existing["wallet_address"]
                 )
                 await interaction.followup.send(
                     embed=_roles_refreshed_embed(
-                        existing["wallet_address"], assigned, balances
+                        existing["wallet_address"],
+                        stacked_roles,
+                        assigned,
+                        balances,
                     ),
                     ephemeral=True,
                 )
@@ -400,14 +457,23 @@ async def _start_verify_flow(
         settings.db_path, str(interaction.user.id)
     )
     if existing is not None:
+        _debug_log(
+            "api.py:_start_verify_flow",
+            "verified user starting refresh",
+            {"discord_user_id": str(interaction.user.id)},
+            "DEPLOY",
+        )
         await interaction.response.defer(ephemeral=True)
         try:
-            assigned, balances = await _refresh_roles_for_user(
+            assigned, stacked_roles, balances = await _refresh_roles_for_user(
                 interaction, settings, existing["wallet_address"]
             )
             await interaction.followup.send(
                 embed=_roles_refreshed_embed(
-                    existing["wallet_address"], assigned, balances
+                    existing["wallet_address"],
+                    stacked_roles,
+                    assigned,
+                    balances,
                 ),
                 ephemeral=True,
             )

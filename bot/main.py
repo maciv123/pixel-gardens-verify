@@ -54,6 +54,8 @@ async def main() -> None:
         flush=True,
     )
     print(f"Verify URL base: {settings.verify_base_url}", flush=True)
+    build = os.getenv("RAILWAY_GIT_COMMIT_SHA", "local")
+    print(f"Build: {build[:12] if build else 'local'}", flush=True)
 
     init_db(settings.db_path)
     bot = create_bot(settings)
