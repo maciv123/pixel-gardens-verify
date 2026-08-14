@@ -11,9 +11,11 @@ from config import load_settings
 from db import init_db
 
 INSTANCE_LOCK_PORT = 47201
+_instance_lock: socket.socket | None = None
 
 
 def ensure_single_instance() -> None:
+    global _instance_lock
     lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         lock.bind(("127.0.0.1", INSTANCE_LOCK_PORT))
@@ -24,6 +26,8 @@ def ensure_single_instance() -> None:
             flush=True,
         )
         sys.exit(1)
+    # Keep the socket open for the process lifetime so the lock is not released.
+    _instance_lock = lock
 
 
 def run_api(settings, bot) -> None:

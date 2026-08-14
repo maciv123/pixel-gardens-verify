@@ -5,8 +5,8 @@ echo === Pixel Gardens Verify Bot ===
 echo.
 echo Stopping any old bot copies...
 taskkill /F /FI "WINDOWTITLE eq Pixel Gardens Bot" >nul 2>&1
-for /f "tokens=2" %%a in ('tasklist /fi "imagename eq python.exe" /fo list ^| find "PID:"') do (
-    taskkill /PID %%a /F >nul 2>&1
+for /f "tokens=2 delims=," %%a in ('wmic process where "name='python.exe' and CommandLine like '%%pixel-gardens-verify%%main.py%%'" get ProcessId /format:csv 2^>nul ^| findstr /r "[0-9]"') do (
+    taskkill /PID %%~a /F >nul 2>&1
 )
 timeout /t 3 /nobreak >nul
 echo Starting bot (keep this window open!)...
