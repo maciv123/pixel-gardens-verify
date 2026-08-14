@@ -1,0 +1,21 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [master, main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Railway redeploy
+        env:
+          DEPLOY_HOOK: ${{ secrets.RAILWAY_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "RAILWAY_DEPLOY_HOOK secret is not set."
+            echo "Add it from Railway → Service → Settings → Deploy → Deploy Hook."
+            exit 0
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK"
+          echo "Railway redeploy triggered."

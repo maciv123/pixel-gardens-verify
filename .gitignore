@@ -1,6 +1,7 @@
 data/
 .env
 railway-paste.env
+debug-cbd26f.log
 __pycache__/
 *.pyc
 .venv/

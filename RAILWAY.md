@@ -40,6 +40,18 @@ In Railway → your service → **Variables**, add:
 - Connect MetaMask on Robinhood Chain → sign → get **PG Holder** role
 - Stop using `start-bot.bat` on your PC
 
+## 6. Auto-redeploy on push (optional)
+
+GitHub pushes do not always redeploy Railway automatically. One-time setup:
+
+1. Railway → service → **Settings** → **Deploy** → copy **Deploy Hook** URL
+2. GitHub repo → **Settings** → **Secrets and variables** → **Actions** → New secret: `RAILWAY_DEPLOY_HOOK` = that URL
+3. Future pushes to `master` trigger a redeploy via `.github/workflows/railway-deploy.yml`
+
+If production is stale, manually **Redeploy** once from Railway → **Deployments**.
+
+Verify deploy: open `https://YOUR-RAILWAY-URL/api/health` — should return `"refresh_roles":"enabled"`.
+
 ## Cost
 
 - **Free plan:** $1/mo credit — may not last all month for 24/7 bot

@@ -1,10 +1,7 @@
 import asyncio
-import json
 import os
 import secrets
-import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import discord
@@ -141,27 +138,6 @@ def _roles_refreshed_embed(
     return embed
 
 
-def _debug_log(location: str, message: str, data: dict[str, Any], hypothesis_id: str) -> None:
-    payload = {
-        "sessionId": "cbd26f",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-        "runId": "refresh-roles",
-    }
-    # #region agent log
-    try:
-        print(f"[DEBUG cbd26f] {json.dumps(payload)}", flush=True)
-        Path(__file__).resolve().parent.parent.joinpath("debug-cbd26f.log").open(
-            "a", encoding="utf-8"
-        ).write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-    # #endregion
-
-
 async def _refresh_roles_for_user(
     interaction: discord.Interaction,
     settings: Settings,
@@ -179,17 +155,6 @@ async def _refresh_roles_for_user(
         wallet_address, settings.collections
     )
     stacked_roles = _resolve_role_names(guild, to_add)
-    _debug_log(
-        "api.py:_refresh_roles_for_user",
-        "refresh role changes computed",
-        {
-            "to_add": to_add,
-            "to_remove": to_remove,
-            "balances": balances,
-            "stacked_roles": stacked_roles,
-        },
-        "REFRESH",
-    )
 
     if not to_add:
         raise ValueError("Wallet does not hold any qualifying NFTs.")
@@ -201,12 +166,6 @@ async def _refresh_roles_for_user(
         return await apply_role_changes(member, to_add, to_remove)
 
     assigned = await _run_on_bot_loop(bot, assign_roles())
-    _debug_log(
-        "api.py:_refresh_roles_for_user",
-        "refresh roles applied",
-        {"newly_assigned": assigned, "stacked_roles": stacked_roles},
-        "REFRESH",
-    )
     return assigned, stacked_roles, balances
 
 
@@ -411,11 +370,11 @@ class VerifyView(discord.ui.View):
     async def verify_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         existing = get_verification_by_discord(
             self.settings.db_path, str(interaction.user.id)
         )
         if existing is not None:
-            await interaction.response.defer(ephemeral=True)
             try:
                 assigned, stacked_roles, balances = await _refresh_roles_for_user(
                     interaction, self.settings, existing["wallet_address"]
@@ -441,10 +400,10 @@ class VerifyView(discord.ui.View):
                 )
             return
 
-        session_id, verify_url = _create_verify_session(
+        _, verify_url = _create_verify_session(
             self.settings, str(interaction.user.id)
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=_verify_embed(verify_url),
             ephemeral=True,
         )
@@ -453,17 +412,11 @@ class VerifyView(discord.ui.View):
 async def _start_verify_flow(
     interaction: discord.Interaction, settings: Settings
 ) -> None:
+    await interaction.response.defer(ephemeral=True)
     existing = get_verification_by_discord(
         settings.db_path, str(interaction.user.id)
     )
     if existing is not None:
-        _debug_log(
-            "api.py:_start_verify_flow",
-            "verified user starting refresh",
-            {"discord_user_id": str(interaction.user.id)},
-            "DEPLOY",
-        )
-        await interaction.response.defer(ephemeral=True)
         try:
             assigned, stacked_roles, balances = await _refresh_roles_for_user(
                 interaction, settings, existing["wallet_address"]
@@ -490,7 +443,7 @@ async def _start_verify_flow(
         return
 
     _, verify_url = _create_verify_session(settings, str(interaction.user.id))
-    await interaction.response.send_message(
+    await interaction.followup.send(
         embed=_verify_embed(verify_url),
         ephemeral=True,
     )
@@ -557,7 +510,14 @@ def create_bot(settings: Settings) -> commands.Bot:
     async def verify_slash(interaction: discord.Interaction) -> None:
         try:
             await _start_verify_flow(interaction, settings)
-            print(f"/verify started for {interaction.user}", flush=True)
+            print(f"/verify completed for {interaction.user}", flush=True)
+        except discord.NotFound as exc:
+            print(f"/verify interaction expired: {exc}", flush=True)
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "That menu entry expired. Open the slash menu and pick `/verify` again.",
+                    ephemeral=True,
+                )
         except Exception as exc:
             print(f"/verify failed: {exc}", flush=True)
             if interaction.response.is_done():
