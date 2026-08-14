@@ -22,5 +22,15 @@ services:
         value: "4663"
       - key: ROBINHOOD_RPC_URL
         value: https://rpc.mainnet.chain.robinhood.com
+      - key: PG_ROLE_HOLDER
+        sync: false
+      - key: PG_ROLE_FLOWER
+        sync: false
+      - key: PG_ROLE_FLOWERING
+        sync: false
+      - key: PG_ROLE_VEG
+        sync: false
+      - key: PG_ROLE_SPROUT
+        sync: false
       - key: VERIFY_BASE_URL
         sync: false
