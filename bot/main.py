@@ -43,9 +43,19 @@ def run_api(settings, bot) -> None:
 async def main() -> None:
     if not os.getenv("RENDER") and not os.getenv("RAILWAY_ENVIRONMENT"):
         ensure_single_instance()
-    settings = load_settings()
-    init_db(settings.db_path)
+    try:
+        settings = load_settings()
+    except Exception as exc:
+        print(f"STARTUP FAILED: {exc}", flush=True)
+        sys.exit(1)
 
+    print(
+        f"Starting verify API on {settings.api_host}:{settings.api_port}",
+        flush=True,
+    )
+    print(f"Verify URL base: {settings.verify_base_url}", flush=True)
+
+    init_db(settings.db_path)
     bot = create_bot(settings)
 
     api_thread = threading.Thread(
@@ -56,8 +66,20 @@ async def main() -> None:
     )
     api_thread.start()
 
-    await bot.start(settings.discord_bot_token)
+    # Let uvicorn bind before Discord connects (Railway health checks).
+    await asyncio.sleep(2)
+
+    try:
+        await bot.start(settings.discord_bot_token)
+    except Exception as exc:
+        print(f"Discord login failed: {exc}", flush=True)
+        print("Verify API stays online; fix token and redeploy.", flush=True)
+        while True:
+            await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
