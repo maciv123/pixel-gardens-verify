@@ -83,31 +83,5 @@ def compute_role_changes(
         add_ids, remove_ids = _stacked_tier_roles(collection.roles, balance)
         to_add.extend(add_ids)
         to_remove.extend(remove_ids)
-        # #region agent log
-        try:
-            import json
-            import time
-            from pathlib import Path
-
-            payload = {
-                "sessionId": "cbd26f",
-                "hypothesisId": "STACK",
-                "location": "verify.py:compute_role_changes",
-                "message": "stacked tier roles computed",
-                "data": {
-                    "collection": collection.name,
-                    "balance": balance,
-                    "to_add": add_ids,
-                    "to_remove": remove_ids,
-                },
-                "timestamp": int(time.time() * 1000),
-                "runId": "stack-roles",
-            }
-            Path(__file__).resolve().parent.parent.joinpath("debug-cbd26f.log").open(
-                "a", encoding="utf-8"
-            ).write(json.dumps(payload) + "\n")
-        except Exception:
-            pass
-        # #endregion
 
     return to_add, to_remove, balances
