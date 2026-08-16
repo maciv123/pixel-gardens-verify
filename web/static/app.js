@@ -23,6 +23,9 @@ const statusEl = document.getElementById("status");
 const walletDisplay = document.getElementById("wallet-display");
 const walletBox = document.getElementById("wallet-box");
 const actionsEl = document.getElementById("actions");
+const mobilePanel = document.getElementById("mobile-panel");
+const openMetaMaskBtn = document.getElementById("open-metamask-btn");
+const copyLinkBtn = document.getElementById("copy-link-btn");
 const stepConnect = document.getElementById("step-connect");
 const stepSign = document.getElementById("step-sign");
 const stepDone = document.getElementById("step-done");
@@ -30,6 +33,40 @@ const stepDone = document.getElementById("step-done");
 let sessionData = null;
 let connectedAddress = null;
 let verifying = false;
+
+function isMobileDevice() {
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+function hasEthereumProvider() {
+  return typeof window.ethereum !== "undefined";
+}
+
+function getMetaMaskDeepLink() {
+  return `https://metamask.app.link/dapp/${encodeURIComponent(window.location.href)}`;
+}
+
+function showMobilePanel() {
+  mobilePanel.classList.add("visible");
+  connectBtn.style.display = "none";
+}
+
+function hideMobilePanel() {
+  mobilePanel.classList.remove("visible");
+  connectBtn.style.display = "";
+}
+
+function updateMobileUi() {
+  if (isMobileDevice() && !hasEthereumProvider()) {
+    showMobilePanel();
+    setStatus(
+      "Tap Open in MetaMask to continue verification on your phone.",
+      "info"
+    );
+  } else {
+    hideMobilePanel();
+  }
+}
 
 function shortAddress(address) {
   if (!address || address.length < 12) return address || "";
@@ -106,6 +143,8 @@ async function loadSession() {
   if (!sessionId) {
     setStatus("Missing verification session. Go back to Discord and run /verify again.", "error");
     connectBtn.disabled = true;
+    openMetaMaskBtn.disabled = true;
+    copyLinkBtn.disabled = true;
     return;
   }
 
@@ -114,16 +153,22 @@ async function loadSession() {
     const body = await res.json().catch(() => ({}));
     setStatus(friendlyError(res.status, body.detail), "error");
     connectBtn.disabled = true;
+    openMetaMaskBtn.disabled = true;
+    copyLinkBtn.disabled = true;
     return;
   }
 
   sessionData = await res.json();
-  setStatus("Ready when you are — connect your wallet to start.", "info");
+  updateMobileUi();
+  if (!mobilePanel.classList.contains("visible")) {
+    setStatus("Ready when you are — connect your wallet to start.", "info");
+  }
 }
 
 function showSuccess(body) {
   setStep("done");
   actionsEl.classList.add("hidden");
+  mobilePanel.classList.remove("visible");
   walletBox.classList.add("visible");
   walletDisplay.textContent = shortAddress(body.wallet || connectedAddress);
 
@@ -181,9 +226,36 @@ async function submitVerification() {
   }
 }
 
+function showNoProviderError() {
+  if (isMobileDevice()) {
+    showMobilePanel();
+    setStatus("Open this page in the MetaMask app to connect your wallet.", "error");
+    return;
+  }
+  setStatus("MetaMask not found. Install MetaMask, then refresh this page.", "error");
+}
+
+openMetaMaskBtn.addEventListener("click", () => {
+  window.location.href = getMetaMaskDeepLink();
+});
+
+copyLinkBtn.addEventListener("click", async () => {
+  const url = window.location.href;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      throw new Error("Clipboard unavailable");
+    }
+    setStatus("Verify link copied. Paste it into MetaMask Browser.", "info");
+  } catch {
+    setStatus("Copy failed. Long-press the address bar and copy the link manually.", "error");
+  }
+});
+
 connectBtn.addEventListener("click", async () => {
-  if (!window.ethereum) {
-    setStatus("MetaMask not found. Install MetaMask, then refresh this page.", "error");
+  if (!hasEthereumProvider()) {
+    showNoProviderError();
     return;
   }
 

@@ -140,6 +140,30 @@
       color: #e7e9ea;
       border: 1px solid #33404d;
     }
+    #mobile-panel {
+      display: none;
+      margin-bottom: 8px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: rgba(88, 101, 242, 0.1);
+      border: 1px solid rgba(88, 101, 242, 0.22);
+    }
+    #mobile-panel.visible { display: block; }
+    #mobile-panel p {
+      margin: 0 0 12px;
+      color: #b6c2cf;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+    #open-metamask-btn {
+      background: linear-gradient(180deg, #f6851b 0%, #e2761b 100%);
+      color: white;
+    }
+    #copy-link-btn {
+      background: #24303a;
+      color: #e7e9ea;
+      border: 1px solid #33404d;
+    }
     #actions.hidden { display: none; }
     #status {
       margin-top: 16px;
@@ -200,7 +224,7 @@
     <div class="steps">
       <div class="step active" id="step-connect">
         <div class="step-num">1</div>
-        <div class="step-text"><strong>Connect wallet</strong>MetaMask on Robinhood Chain</div>
+        <div class="step-text"><strong>Connect wallet</strong>MetaMask on Robinhood Chain (on phone: open in MetaMask app)</div>
       </div>
       <div class="step" id="step-sign">
         <div class="step-num">2</div>
@@ -217,9 +241,15 @@
       <div id="wallet-display" class="wallet"></div>
     </div>
 
+    <div id="mobile-panel">
+      <p>Discord's in-app browser can't connect wallets. Open this page in the MetaMask app, then connect and sign.</p>
+      <button type="button" id="open-metamask-btn">Open in MetaMask</button>
+      <button type="button" id="copy-link-btn">Copy verify link</button>
+    </div>
+
     <div id="actions">
-      <button id="connect-btn">Connect Wallet</button>
-      <button id="verify-btn" disabled>Sign & Verify</button>
+      <button type="button" id="connect-btn">Connect Wallet</button>
+      <button type="button" id="verify-btn" disabled>Sign & Verify</button>
     </div>
 
     <div id="status"></div>
