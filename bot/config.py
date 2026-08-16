@@ -24,6 +24,8 @@ class Settings:
     contract_address: str
     chain_id: int
     robinhood_rpc_url: str
+    pg_role_og: int | None
+    og_verifier_limit: int
 
 
 def _require(name: str) -> str:
@@ -44,6 +46,9 @@ def load_settings() -> Settings:
             "and at least PG_ROLE_HOLDER or HOLDER_ROLE_ID."
         )
 
+    pg_role_og_raw = os.getenv("PG_ROLE_OG", "").strip()
+    og_verifier_limit_raw = os.getenv("OG_VERIFIER_LIMIT", "15").strip()
+
     return Settings(
         discord_bot_token=_require("DISCORD_BOT_TOKEN"),
         discord_guild_id=int(_require("DISCORD_GUILD_ID")),
@@ -56,4 +61,6 @@ def load_settings() -> Settings:
         contract_address=pg.contract,
         chain_id=pg.chain_id,
         robinhood_rpc_url=pg.rpc_url,
+        pg_role_og=int(pg_role_og_raw) if pg_role_og_raw else None,
+        og_verifier_limit=int(og_verifier_limit_raw) if og_verifier_limit_raw else 15,
     )

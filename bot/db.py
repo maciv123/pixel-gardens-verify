@@ -90,8 +90,25 @@ def save_verification(db_path: str, discord_user_id: str, wallet_address: str) -
             INSERT INTO verifications (discord_user_id, wallet_address, verified_at)
             VALUES (?, ?, ?)
             ON CONFLICT(discord_user_id) DO UPDATE SET
-                wallet_address = excluded.wallet_address,
-                verified_at = excluded.verified_at
+                wallet_address = excluded.wallet_address
             """,
             (discord_user_id, wallet_address.lower(), now),
         )
+
+
+def get_first_verifier_ids(db_path: str, limit: int) -> list[str]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT discord_user_id
+            FROM verifications
+            ORDER BY verified_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [row["discord_user_id"] for row in rows]
+
+
+def is_og_verifier(db_path: str, discord_user_id: str, limit: int) -> bool:
+    return discord_user_id in get_first_verifier_ids(db_path, limit)

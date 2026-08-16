@@ -15,9 +15,11 @@ from pydantic import BaseModel
 from config import Settings
 from db import (
     create_session,
+    get_first_verifier_ids,
     get_session,
     get_verification_by_discord,
     get_verification_by_wallet,
+    is_og_verifier,
     mark_session_used,
     save_verification,
 )
@@ -163,7 +165,9 @@ async def _refresh_roles_for_user(
         member = guild.get_member(interaction.user.id)
         if member is None:
             member = await guild.fetch_member(interaction.user.id)
-        return await apply_role_changes(member, to_add, to_remove)
+        assigned = await apply_role_changes(member, to_add, to_remove)
+        assigned.extend(await grant_og_role_if_eligible(member, settings))
+        return assigned
 
     assigned = await _run_on_bot_loop(bot, assign_roles())
     return assigned, stacked_roles, balances
@@ -190,6 +194,34 @@ async def apply_role_changes(
         if role not in member.roles:
             await member.add_roles(role, reason="NFT verify tier update")
             assigned.append(role.name)
+
+    return assigned
+
+
+async def grant_og_role_if_eligible(
+    member: discord.Member,
+    settings: Settings,
+) -> list[str]:
+    assigned: list[str] = []
+    if settings.pg_role_og is None:
+        return assigned
+
+    if not is_og_verifier(
+        settings.db_path,
+        str(member.id),
+        settings.og_verifier_limit,
+    ):
+        return assigned
+
+    role = member.guild.get_role(settings.pg_role_og)
+    if role is None:
+        raise RuntimeError(
+            f"Configured OG role {settings.pg_role_og} was not found in the server"
+        )
+
+    if role not in member.roles:
+        await member.add_roles(role, reason="OG Pixel Garden verifier")
+        assigned.append(role.name)
 
     return assigned
 
@@ -325,7 +357,9 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             member = guild.get_member(int(row["discord_user_id"]))
             if member is None:
                 member = await guild.fetch_member(int(row["discord_user_id"]))
-            return await apply_role_changes(member, to_add, to_remove)
+            assigned = await apply_role_changes(member, to_add, to_remove)
+            assigned.extend(await grant_og_role_if_eligible(member, settings))
+            return assigned
 
         try:
             assigned = await _run_on_bot_loop(bot, assign_member_roles())
@@ -548,6 +582,70 @@ def create_bot(settings: Settings) -> commands.Bot:
         except Exception as exc:
             print(f"/setup-verify failed: {exc}", flush=True)
             await interaction.followup.send(f"Error: {exc}", ephemeral=True)
+
+    @bot.tree.command(
+        name="og-backfill",
+        description="(Admin) Assign OG role to first verifiers still in server",
+        guild=guild,
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def og_backfill_slash(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        if settings.pg_role_og is None:
+            await interaction.followup.send(
+                "PG_ROLE_OG is not configured.", ephemeral=True
+            )
+            return
+
+        guild_obj = bot.get_guild(settings.discord_guild_id)
+        if guild_obj is None:
+            await interaction.followup.send(
+                "Discord server not available.", ephemeral=True
+            )
+            return
+
+        role = guild_obj.get_role(settings.pg_role_og)
+        if role is None:
+            await interaction.followup.send(
+                f"OG role {settings.pg_role_og} was not found in the server.",
+                ephemeral=True,
+            )
+            return
+
+        verifier_ids = get_first_verifier_ids(
+            settings.db_path, settings.og_verifier_limit
+        )
+        assigned_names: list[str] = []
+        skipped = 0
+
+        for user_id in verifier_ids:
+            member = guild_obj.get_member(int(user_id))
+            if member is None:
+                try:
+                    member = await guild_obj.fetch_member(int(user_id))
+                except discord.NotFound:
+                    skipped += 1
+                    continue
+
+            if role in member.roles:
+                continue
+
+            await member.add_roles(role, reason="OG Pixel Garden verifier backfill")
+            assigned_names.append(member.display_name)
+
+        lines: list[str] = []
+        if assigned_names:
+            lines.append(f"Assigned OG role to: {', '.join(assigned_names)}")
+        else:
+            lines.append("No new OG roles assigned.")
+        if skipped:
+            lines.append(
+                f"Skipped {skipped} verifier(s) who are no longer in the server."
+            )
+
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        print(f"/og-backfill completed for {interaction.user}", flush=True)
 
     @bot.command(name="verify")
     async def verify_prefix(ctx: commands.Context) -> None:
