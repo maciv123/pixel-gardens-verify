@@ -358,6 +358,9 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
             if member is None:
                 member = await guild.fetch_member(int(row["discord_user_id"]))
             assigned = await apply_role_changes(member, to_add, to_remove)
+            save_verification(
+                settings.db_path, row["discord_user_id"], payload.address
+            )
             assigned.extend(await grant_og_role_if_eligible(member, settings))
             return assigned
 
@@ -378,7 +381,6 @@ def create_api(settings: Settings, bot: discord.Client) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        save_verification(settings.db_path, row["discord_user_id"], payload.address)
         mark_session_used(settings.db_path, payload.session_id)
 
         return VerifyResponse(
@@ -616,8 +618,18 @@ def create_bot(settings: Settings) -> commands.Bot:
         verifier_ids = get_first_verifier_ids(
             settings.db_path, settings.og_verifier_limit
         )
+        if not verifier_ids:
+            await interaction.followup.send(
+                "No verifications in the database yet. OG is assigned to the first "
+                f"{settings.og_verifier_limit} people who complete wallet verify.",
+                ephemeral=True,
+            )
+            return
+
         assigned_names: list[str] = []
-        skipped = 0
+        already_had: list[str] = []
+        skipped: list[str] = []
+        failed: list[str] = []
 
         for user_id in verifier_ids:
             member = guild_obj.get_member(int(user_id))
@@ -625,24 +637,36 @@ def create_bot(settings: Settings) -> commands.Bot:
                 try:
                     member = await guild_obj.fetch_member(int(user_id))
                 except discord.NotFound:
-                    skipped += 1
+                    skipped.append(user_id)
                     continue
 
             if role in member.roles:
+                already_had.append(member.display_name)
                 continue
 
-            await member.add_roles(role, reason="OG Pixel Garden verifier backfill")
-            assigned_names.append(member.display_name)
+            try:
+                await member.add_roles(
+                    role, reason="OG Pixel Garden verifier backfill"
+                )
+                assigned_names.append(member.display_name)
+            except discord.Forbidden:
+                failed.append(member.display_name)
 
-        lines: list[str] = []
+        lines: list[str] = [
+            f"First {len(verifier_ids)} verifier(s) in database (by verify time)."
+        ]
         if assigned_names:
-            lines.append(f"Assigned OG role to: {', '.join(assigned_names)}")
-        else:
-            lines.append("No new OG roles assigned.")
+            lines.append(f"Assigned OG: {', '.join(assigned_names)}")
+        if already_had:
+            lines.append(f"Already had OG: {', '.join(already_had)}")
         if skipped:
+            lines.append(f"Not in server anymore: {len(skipped)} user(s)")
+        if failed:
             lines.append(
-                f"Skipped {skipped} verifier(s) who are no longer in the server."
+                f"Could not assign (move bot above OG role): {', '.join(failed)}"
             )
+        if not assigned_names and not already_had and not failed:
+            lines.append("No OG roles assigned.")
 
         await interaction.followup.send("\n".join(lines), ephemeral=True)
         print(f"/og-backfill completed for {interaction.user}", flush=True)
