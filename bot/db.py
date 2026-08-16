@@ -96,6 +96,12 @@ def save_verification(db_path: str, discord_user_id: str, wallet_address: str) -
         )
 
 
+def count_verifications(db_path: str) -> int:
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) AS total FROM verifications").fetchone()
+    return int(row["total"]) if row else 0
+
+
 def get_first_verifier_ids(db_path: str, limit: int) -> list[str]:
     with connect(db_path) as conn:
         rows = conn.execute(

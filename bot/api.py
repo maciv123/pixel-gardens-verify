@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from config import Settings
 from db import (
+    count_verifications,
     create_session,
     get_first_verifier_ids,
     get_session,
@@ -584,6 +585,58 @@ def create_bot(settings: Settings) -> commands.Bot:
         except Exception as exc:
             print(f"/setup-verify failed: {exc}", flush=True)
             await interaction.followup.send(f"Error: {exc}", ephemeral=True)
+
+    @bot.tree.command(
+        name="og-status",
+        description="(Admin) Show first OG-eligible verifiers and OG role status",
+        guild=guild,
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def og_status_slash(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        total = count_verifications(settings.db_path)
+        if settings.pg_role_og is None:
+            await interaction.followup.send(
+                f"Total verifications: {total}\nPG_ROLE_OG is not configured.",
+                ephemeral=True,
+            )
+            return
+
+        guild_obj = bot.get_guild(settings.discord_guild_id)
+        if guild_obj is None:
+            await interaction.followup.send("Discord server not available.", ephemeral=True)
+            return
+
+        role = guild_obj.get_role(settings.pg_role_og)
+        role_label = role.name if role is not None else f"missing role {settings.pg_role_og}"
+
+        verifier_ids = get_first_verifier_ids(
+            settings.db_path, settings.og_verifier_limit
+        )
+        lines = [
+            f"Total verifications: {total}",
+            f"OG role: {role_label} ({settings.pg_role_og})",
+            f"First {settings.og_verifier_limit} by verify time:",
+        ]
+
+        if not verifier_ids:
+            lines.append("— none yet —")
+        else:
+            for idx, user_id in enumerate(verifier_ids, start=1):
+                member = guild_obj.get_member(int(user_id))
+                if member is None:
+                    try:
+                        member = await guild_obj.fetch_member(int(user_id))
+                    except discord.NotFound:
+                        lines.append(f"{idx}. `{user_id}` — left server")
+                        continue
+                has_og = role is not None and role in member.roles
+                lines.append(
+                    f"{idx}. {member.display_name} — OG: {'yes' if has_og else 'NO'}"
+                )
+
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
 
     @bot.tree.command(
         name="og-backfill",
